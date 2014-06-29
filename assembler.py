@@ -34,6 +34,7 @@ import shutil
 import subprocess
 
 REL_PATH_SRC_DIR = 'source'
+REL_PATH_DONE_DIR = 'done'
 REL_PATH_WORK_DIR = 'work'
 REL_PATH_TARGET_DIR = 'target'
 
@@ -71,11 +72,11 @@ def _get_tag_name(iulist):
 
 def _get_distribution_info(source_dir, work_dir):
   '''
-  Finds all Eclipse SDK archives in 'dowloadDir' and extracts the information used from the filename.
+  Finds all Eclipse SDK archives in 'source_dir' and extracts the information used from the filename.
   '''
   distribution_info = []
   for distribution in glob.glob(os.path.join(source_dir, 'eclipse-SDK-*')):
-    a, b, s, v, variant = distribution.split('-', 4)
+    a, b, s, variant = distribution.split('-', 3)
     platform, filetype = variant.split('.', 1)
     distribution_info.append((os.path.abspath(distribution), platform, filetype, 
                              os.path.abspath(os.path.join(work_dir, platform))))
@@ -115,10 +116,10 @@ def _create_archive(platform_workdir, filetype, platform, distribution_name, tar
   if os.path.exists(archiveFile):
     os.remove(archiveFile)
     
-  if filetype == 'tar.gz':
+  if filetype == 'zip' or platform == 'macosx-cocoa-x86_64' :
+    _call_executable(['zip', '-r', '-q', archiveFile, distribution_name], platform_workdir)
+  elif filetype == 'tar.gz':
     _call_executable(['tar', '-czf', archiveFile, distribution_name], platform_workdir)
-  elif filetype == 'zip':
-    _call_executable(['zip', '-r', archiveFile, distribution_name], platform_workdir)
   else:
     print('Error: unknown file type \'{ftype}\''.format(ftype=filetype))
     exit(-1)
@@ -137,13 +138,23 @@ def _install(destination, configpath, eclipse_binary):
     repolist = iulist.replace('.iulist', '.repolist');
     if os.path.exists(repolist):
       print('  -IUs: ' + iulist + ' from: ' + repolist)
+      # Sometimes there are problems that can be fixed by retrying
+      retry_count=0
+      while retry_count < 3:
+        try:
       _call_executable([os.path.abspath(eclipse_binary), 
                         '-application', 'org.eclipse.equinox.p2.director', 
+                          '-nosplash',
                         '-repository', _read_file_and_join_lines(repolist), 
                         '-installIU', _read_file_and_join_lines(iulist),
                         '-destination', destination,
                         '-tag', _get_tag_name(iulist),
                         '-profile', 'SDKProfile'])
+          break
+        except:
+          retry_count+=1
+          print "   -WARNING: An error occured while downloading. Nr of retry: "+ str(retry_count)
+          pass
   
 
 def _call_executable(commandline, command_workdir=os.getcwd()):
@@ -169,8 +180,17 @@ def _manipulate_splash(basedir, distribution_description):
   if not len(splash_files) == 1: 
     print('Error: splash.bmp not found in {d}'.format(d=basedir))
     exit(-1)
-  # FIXME 2011-08-22 michael.pellaton: use two Popen objects connected via PIPE...
-  os.popen('convert -background \'#00000000\' -pointsize 14 -font Nimbus-Sans-Regular -fill white label:\'{d}\' miff:- | composite -gravity northeast  -geometry +62+10 - {f} {f}'.format(d=distribution_description, f=os.path.abspath(splash_files[0])))
+  os.popen('convert -background \'#00000000\' -transparent \'#00000000\' -pointsize 14 -font Nimbus-Sans-Regular -fill white label:\'{d}\' miff:- | composite -gravity northeast  -geometry +10+200 - {f} {f}'.format(d=distribution_description, f=os.path.abspath(splash_files[0])))
+
+def _move_archive(archive, done_dir):
+  '''
+  Moves the source archive to the 'done' directory.
+  @param archive the path to the archive  
+  @param done_dir the directory where the archive will be moved
+  '''
+  if not os.path.exists(done_dir):
+    os.mkdir(done_dir)
+  shutil.move(archive, done_dir)
 
 
 def assemble(configpath, distribution_name, distribution_description, eclipse_binary):
@@ -204,4 +224,7 @@ def assemble(configpath, distribution_name, distribution_description, eclipse_bi
     _manipulate_splash(destination, distribution_description)
     print(' -creating archive')
     _create_archive(platform_workdir, filetype, platform, distribution_name, target_dir)
+    print(' -moving source archive')
+    done_dir=os.path.abspath(os.path.join(configpath, REL_PATH_DONE_DIR))
+    _move_archive(archive, done_dir)
     print(' -done.')
